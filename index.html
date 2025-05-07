@@ -16,8 +16,15 @@
       }
 
       #ui-container {
-        text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.8);
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        padding: 10px;
+        background-color: rgba(0, 0, 50, 0.7);
+        color: white;
         z-index: 1000;
+        text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.8);
       }
 
       #camera-feed {
@@ -126,6 +133,19 @@
           opacity: 0.7;
         }
       }
+
+      .debug-info {
+        position: fixed;
+        bottom: 10px;
+        right: 10px;
+        background-color: rgba(0, 0, 0, 0.7);
+        color: white;
+        padding: 5px;
+        border-radius: 5px;
+        font-size: 10px;
+        z-index: 1000;
+        display: none;
+      }
     </style>
   </head>
   <body>
@@ -137,16 +157,16 @@
 
     <video id="camera-feed" autoplay playsinline></video>
 
-    <div id="ui-container" class="fixed top-0 left-0 w-full p-4 z-10 text-white bg-blue-900 bg-opacity-70" style="display: none">
-      <h1 class="text-lg font-bold">Enhanced AR Location App</h1>
-      <div id="location-info" class="text-sm">
-        <p id="current-lat">lat: Mencari...</p>
-        <p id="current-lon">lon: Mencari...</p>
-        <p id="current-alt">altitude: Mencari...</p>
+    <div id="ui-container" style="display: none">
+      <h1 style="font-size: 16px; margin: 0 0 5px 0">Enhanced AR Location App</h1>
+      <div id="location-info" style="font-size: 12px">
+        <p id="current-lat" style="margin: 2px 0">lat: Mencari...</p>
+        <p id="current-lon" style="margin: 2px 0">lon: Mencari...</p>
+        <p id="current-alt" style="margin: 2px 0">altitude: Mencari...</p>
       </div>
-      <div id="bearing-info" class="text-sm">
-        <p id="bearing">Bearing: Mencari...</p>
-        <p id="nearest-poi">Lokasi Terdekat: -</p>
+      <div id="bearing-info" style="font-size: 12px">
+        <p id="bearing" style="margin: 2px 0">Bearing: Mencari...</p>
+        <p id="nearest-poi" style="margin: 2px 0">Lokasi Terdekat: -</p>
       </div>
     </div>
 
@@ -155,6 +175,9 @@
 
     <!-- Container untuk AR points -->
     <div id="ar-points-container"></div>
+
+    <!-- Debug info box -->
+    <div id="debug-info" class="debug-info"></div>
 
     <script>
       // Kode untuk points of interest
@@ -184,13 +207,16 @@
 
       // Konfigurasi tampilan
       const CONFIG = {
-        minScale: 0.5, // Skala minimum objek
-        maxScale: 5, // Skala maksimum objek
-        minDistance: 5, // Jarak minimum untuk skala maksimum (dalam meter)
-        maxDistance: 10000, // Jarak maksimum untuk skala minimum (dalam meter)
-        visibleDistance: 10000, // Jarak maksimum objek terlihat (meter)
-        pathUpdateInterval: 200, // Interval pembaruan path (ms)
-        cameraFOV: 60, // Field of view kamera dalam derajat
+        minScale: 0.1, // Skala minimum objek (ketika jauh)
+        maxScale: 2.0, // Skala maksimum objek (ketika dekat)
+        minDistance: 10, // Jarak minimum untuk skala maksimum (dalam meter)
+        maxDistance: 1000, // Jarak maksimum untuk skala minimum (dalam meter)
+        visibleDistance: 5000, // Jarak maksimum objek terlihat (meter)
+        updateInterval: 1000, // Interval pembaruan posisi (ms)
+        cameraFOV: 75, // Field of view kamera dalam derajat
+        stabilityThreshold: 5, // Threshold perubahan bearing untuk pembaruan posisi (derajat)
+        locationFilter: 0.2, // Filter lokasi (0-1, semakin tinggi semakin stabil)
+        bearingFilter: 0.1, // Filter bearing (0-1, semakin tinggi semakin stabil)
       };
 
       // Elemen UI
@@ -205,16 +231,24 @@
       const nearestPoiElement = document.getElementById("nearest-poi");
       const distanceIndicatorsContainer = document.getElementById("distance-indicators");
       const arPointsContainer = document.getElementById("ar-points-container");
+      const debugInfo = document.getElementById("debug-info");
 
       // Status aplikasi
       let userPosition = { latitude: 0, longitude: 0, altitude: 0 };
+      let filteredUserPosition = { latitude: 0, longitude: 0, altitude: 0 };
       let deviceHeading = 0;
+      let filteredDeviceHeading = 0;
+      let previousHeading = 0;
       let arPoints = {};
       let distanceIndicators = {};
       let cameraStream = null;
       let hasPermissions = false;
       let watchPositionId = null;
       let deviceOrientationPermission = false;
+      let updateTimer = null;
+      let lastUpdateTime = 0;
+      let locationUpdateCount = 0;
+      let orientationUpdateCount = 0;
 
       // Fungsi untuk menghitung jarak antara dua titik geografis
       function calculateDistance(lat1, lon1, lat2, lon2) {
@@ -252,17 +286,36 @@
         return (radians * 180) / Math.PI;
       }
 
+      // Fungsi untuk menerapkan filter eksponensial pada nilai
+      function applyExponentialFilter(newValue, oldValue, weight) {
+        if (oldValue === 0) return newValue; // Nilai awal
+        return oldValue * (1 - weight) + newValue * weight;
+      }
+
+      // Fungsi untuk memfilter nilai sudut (bearing)
+      function filterAngle(newAngle, oldAngle, weight) {
+        if (oldAngle === 0) return newAngle; // Nilai awal
+
+        // Hitung selisih sudut terkecil
+        let diff = ((newAngle - oldAngle + 180) % 360) - 180;
+        if (diff < -180) diff += 360;
+
+        // Terapkan filter
+        return (oldAngle + diff * weight + 360) % 360;
+      }
+
       // Meminta izin dan inisialisasi AR
       permissionBtn.addEventListener("click", initializeAR);
 
       async function initializeAR() {
         try {
-          // Meminta izin kamera
+          // Meminta izin kamera dengan resolusi normal
           cameraStream = await navigator.mediaDevices.getUserMedia({
             video: {
               facingMode: "environment",
-              width: { ideal: window.innerWidth },
-              height: { ideal: window.innerHeight },
+              width: { ideal: 1280 },
+              height: { ideal: 720 },
+              zoom: 1.0, // Nilai zoom normal
             },
             audio: false,
           });
@@ -309,6 +362,9 @@
           permissionContainer.style.display = "none";
           uiContainer.style.display = "block";
           hasPermissions = true;
+
+          // Jadwalkan pembaruan AR pada interval tetap
+          updateTimer = setInterval(updateAR, CONFIG.updateInterval);
         } catch (error) {
           console.error("Error initializing AR:", error);
           alert("Gagal mengakses kamera atau lokasi: " + error.message);
@@ -317,6 +373,8 @@
 
       // Memperbarui posisi dan POI
       function updatePosition(position) {
+        locationUpdateCount++;
+
         const latitude = position.coords.latitude;
         const longitude = position.coords.longitude;
         const altitude = position.coords.altitude || 0;
@@ -324,16 +382,42 @@
         // Simpan posisi pengguna
         userPosition = { latitude, longitude, altitude };
 
-        // Update UI dengan informasi lokasi
-        latElement.textContent = `lat: ${latitude.toFixed(7)}`;
-        lonElement.textContent = `lon: ${longitude.toFixed(7)}`;
-        altElement.textContent = `altitude: ${altitude.toFixed(2)}`;
+        // Terapkan filter untuk memperhalus perpindahan
+        if (filteredUserPosition.latitude === 0) {
+          // Inisialisasi awal
+          filteredUserPosition = userPosition;
+        } else {
+          // Terapkan filter
+          filteredUserPosition = {
+            latitude: applyExponentialFilter(latitude, filteredUserPosition.latitude, CONFIG.locationFilter),
+            longitude: applyExponentialFilter(longitude, filteredUserPosition.longitude, CONFIG.locationFilter),
+            altitude: applyExponentialFilter(altitude, filteredUserPosition.altitude, CONFIG.locationFilter),
+          };
+        }
 
-        // Update POI pada scene
-        updateARPoints();
+        // Update UI dengan informasi lokasi
+        latElement.textContent = `lat: ${filteredUserPosition.latitude.toFixed(7)}`;
+        lonElement.textContent = `lon: ${filteredUserPosition.longitude.toFixed(7)}`;
+        altElement.textContent = `altitude: ${filteredUserPosition.altitude.toFixed(2)}`;
 
         // Tentukan POI terdekat
         updateNearestPOI();
+      }
+
+      // Fungsi untuk memperbarui AR secara berkala
+      function updateAR() {
+        if (!hasPermissions || filteredUserPosition.latitude === 0) return;
+
+        // Hitung waktu sejak pembaruan terakhir
+        const now = Date.now();
+        const timeDelta = now - lastUpdateTime;
+        lastUpdateTime = now;
+
+        // Debug info
+        debugInfo.textContent = `Location updates: ${locationUpdateCount}, Orientation updates: ${orientationUpdateCount}`;
+
+        // Update POI pada scene
+        updateARPoints();
       }
 
       // Menangani kesalahan lokasi
@@ -348,7 +432,7 @@
         let nearestDistance = Infinity;
 
         POINTS_OF_INTEREST.forEach((poi) => {
-          const distance = calculateDistance(userPosition.latitude, userPosition.longitude, poi.latitude, poi.longitude);
+          const distance = calculateDistance(filteredUserPosition.latitude, filteredUserPosition.longitude, poi.latitude, poi.longitude);
 
           if (distance < nearestDistance) {
             nearestDistance = distance;
@@ -369,13 +453,13 @@
           const id = `poi-${poi.name.replace(/\s+/g, "-").toLowerCase()}`;
 
           // Hitung jarak ke POI
-          const distance = calculateDistance(userPosition.latitude, userPosition.longitude, poi.latitude, poi.longitude);
+          const distance = calculateDistance(filteredUserPosition.latitude, filteredUserPosition.longitude, poi.latitude, poi.longitude);
 
           // Hitung bearing ke POI
-          const bearing = calculateBearing(userPosition.latitude, userPosition.longitude, poi.latitude, poi.longitude);
+          const bearing = calculateBearing(filteredUserPosition.latitude, filteredUserPosition.longitude, poi.latitude, poi.longitude);
 
           // Relatif bearing terhadap perangkat
-          const relativeBearing = (bearing - deviceHeading + 360) % 360;
+          const relativeBearing = (bearing - filteredDeviceHeading + 360) % 360;
 
           // Tampilkan hanya jika dalam field of view kamera
           const inFieldOfView = relativeBearing < CONFIG.cameraFOV / 2 || relativeBearing > 360 - CONFIG.cameraFOV / 2;
@@ -418,9 +502,11 @@
             // Simpan referensi
             arPoints[id] = {
               element: arPoint,
+              marker: marker,
               distanceLabel: distanceLabel,
-              distance: distance,
-              bearing: bearing,
+              poi: poi,
+              lastRelativeBearing: relativeBearing,
+              lastDistance: distance,
             };
 
             // Buat indikator jarak di UI
@@ -428,11 +514,14 @@
           } else {
             // Perbarui AR point yang sudah ada
             const arPoint = arPoints[id];
-            arPoint.distance = distance;
-            arPoint.bearing = bearing;
 
             // Perbarui teks jarak
             arPoint.distanceLabel.textContent = formatDistance(distance);
+
+            // Simpan nilai untuk perhitungan stabilitas
+            const bearingDiff = Math.abs(relativeBearing - arPoint.lastRelativeBearing);
+            arPoint.lastRelativeBearing = relativeBearing;
+            arPoint.lastDistance = distance;
 
             // Tampilkan/sembunyikan berdasarkan field of view
             arPoint.element.style.display = isVisible && inFieldOfView ? "flex" : "none";
@@ -457,22 +546,28 @@
         let screenX;
         if (relativeBearing < CONFIG.cameraFOV / 2) {
           // Dalam field of view depan
-          screenX = 0.5 + relativeBearing / CONFIG.cameraFOV;
+          screenX = 0.5 - relativeBearing / CONFIG.cameraFOV;
         } else {
           // Dalam field of view belakang
-          screenX = (relativeBearing - 360) / CONFIG.cameraFOV + 0.5;
+          screenX = 0.5 - (relativeBearing - 360) / CONFIG.cameraFOV;
         }
 
-        // Buat sedikit ketinggian berdasarkan jarak
-        const verticalPosition = 0.5 - 0.1 * Math.min(distance / 1000, 0.3);
+        // Pertahankan ketinggian yang stabil
+        const verticalPosition = 0.5;
 
-        // Sesuaikan skala berdasarkan jarak
-        const scale = CONFIG.minScale + (CONFIG.maxScale - CONFIG.minScale) * (1 - Math.min(Math.max(distance - CONFIG.minDistance, 0) / (CONFIG.maxDistance - CONFIG.minDistance), 1));
+        // Sesuaikan skala berdasarkan jarak - semakin dekat semakin besar
+        const distanceRatio = Math.max(0, Math.min(1, (distance - CONFIG.minDistance) / (CONFIG.maxDistance - CONFIG.minDistance)));
+        const scale = CONFIG.maxScale - (CONFIG.maxScale - CONFIG.minScale) * distanceRatio;
 
         // Terapkan posisi dan skala
         arPoint.element.style.left = `${screenX * 100}%`;
         arPoint.element.style.top = `${verticalPosition * 100}%`;
         arPoint.element.style.transform = `translate(-50%, -50%) scale(${scale})`;
+
+        // Sesuaikan ukuran juga berdasarkan jarak
+        const markerSize = 60 * scale;
+        arPoint.marker.style.width = `${markerSize}px`;
+        arPoint.marker.style.height = `${markerSize}px`;
       }
 
       // Memformat jarak untuk tampilan
@@ -490,12 +585,12 @@
         indicator.id = `indicator-${id}`;
         indicator.className = "distance-indicator";
         indicator.style.backgroundColor = poi.color || "#3366FF";
-        indicator.textContent = `${poi.name}: ${formatDistance(arPoints[id].distance)}`;
+        indicator.textContent = `${poi.name}: ${formatDistance(arPoints[id].lastDistance)}`;
 
         distanceIndicatorsContainer.appendChild(indicator);
         distanceIndicators[id] = indicator;
 
-        updateDistanceIndicator(id, poi, arPoints[id].distance, arPoints[id].bearing);
+        updateDistanceIndicator(id, poi, arPoints[id].lastDistance, arPoints[id].lastRelativeBearing);
       }
 
       // Memperbarui indikator jarak di UI
@@ -507,7 +602,7 @@
         indicator.textContent = `${poi.name}: ${formatDistance(distance)}`;
 
         // Hitung posisi indikator berdasarkan bearing
-        const relativeBearing = (bearing - deviceHeading + 360) % 360;
+        const relativeBearing = (bearing - filteredDeviceHeading + 360) % 360;
         const radianBearing = toRadians(relativeBearing);
 
         // Posisikan di tepi layar berdasarkan arah bearing
@@ -533,6 +628,8 @@
       function initDeviceOrientation() {
         if (window.DeviceOrientationEvent) {
           window.addEventListener("deviceorientation", function (event) {
+            orientationUpdateCount++;
+
             if (event.alpha !== null) {
               // Hitung bearing (arah kompas)
               let heading = 360 - event.alpha;
@@ -544,13 +641,15 @@
               // Simpan heading saat ini
               deviceHeading = heading;
 
-              // Update UI
-              bearingElement.textContent = `Bearing: ${heading.toFixed(1)}°`;
-
-              // Perbarui AR points jika posisi sudah tersedia
-              if (userPosition.latitude !== 0 && userPosition.longitude !== 0) {
-                updateARPoints();
+              // Terapkan filter untuk stabilitas
+              if (filteredDeviceHeading === 0) {
+                filteredDeviceHeading = deviceHeading;
+              } else {
+                filteredDeviceHeading = filterAngle(deviceHeading, filteredDeviceHeading, CONFIG.bearingFilter);
               }
+
+              // Update UI
+              bearingElement.textContent = `Bearing: ${filteredDeviceHeading.toFixed(1)}°`;
             }
           });
         } else {
@@ -560,8 +659,8 @@
 
       // Perbarui ukuran layar ketika orientasi berubah
       window.addEventListener("resize", function () {
-        if (hasPermissions && userPosition.latitude !== 0 && userPosition.longitude !== 0) {
-          updateARPoints();
+        if (hasPermissions && filteredUserPosition.latitude !== 0) {
+          updateAR();
         }
       });
 
@@ -574,7 +673,14 @@
         if (watchPositionId !== null) {
           navigator.geolocation.clearWatch(watchPositionId);
         }
+
+        if (updateTimer !== null) {
+          clearInterval(updateTimer);
+        }
       });
+
+      // Tampilkan debug info untuk pengembangan
+      // debugInfo.style.display = "block";
     </script>
   </body>
 </html>
