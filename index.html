@@ -6,17 +6,28 @@
     <title>Enhanced AR Location App</title>
     <script src="https://aframe.io/releases/1.2.0/aframe.min.js"></script>
     <script src="https://raw.githack.com/AR-js-org/AR.js/master/aframe/build/aframe-ar.js"></script>
-    <script src="https://cdn.tailwindcss.com"></script>
     <style>
       body {
         font-family: Arial, sans-serif;
         overflow: hidden;
         margin: 0;
         padding: 0;
+        background-color: #000;
       }
 
       #ui-container {
         text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.8);
+        z-index: 1000;
+      }
+
+      #camera-feed {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        z-index: -1;
       }
 
       .distance-indicator {
@@ -28,11 +39,105 @@
         position: absolute;
         transform: translate(-50%, -50%);
         white-space: nowrap;
+        z-index: 1000;
+      }
+
+      #permission-container {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background-color: rgba(0, 0, 0, 0.8);
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        align-items: center;
+        z-index: 2000;
+        color: white;
+        text-align: center;
+      }
+
+      #permission-btn {
+        background-color: #4285f4;
+        color: white;
+        border: none;
+        padding: 12px 24px;
+        border-radius: 24px;
+        font-size: 18px;
+        margin-top: 20px;
+        cursor: pointer;
+      }
+
+      .ar-point {
+        position: absolute;
+        transform: translate(-50%, -50%);
+        pointer-events: none;
+        z-index: 100;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        color: white;
+      }
+
+      .ar-point-marker {
+        width: 60px;
+        height: 60px;
+        border-radius: 50%;
+        background-color: rgba(255, 255, 255, 0.3);
+        border: 2px solid white;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+      }
+
+      .ar-point-inner {
+        width: 20px;
+        height: 20px;
+        border-radius: 50%;
+        background-color: white;
+        animation: pulse 2s infinite;
+      }
+
+      .ar-point-label {
+        margin-top: 8px;
+        background-color: rgba(0, 0, 0, 0.5);
+        padding: 4px 8px;
+        border-radius: 12px;
+        font-weight: bold;
+        text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.8);
+      }
+
+      .ar-point-distance {
+        font-size: 12px;
+      }
+
+      @keyframes pulse {
+        0% {
+          transform: scale(0.8);
+          opacity: 0.7;
+        }
+        50% {
+          transform: scale(1.2);
+          opacity: 1;
+        }
+        100% {
+          transform: scale(0.8);
+          opacity: 0.7;
+        }
       }
     </style>
   </head>
   <body>
-    <div id="ui-container" class="absolute top-0 left-0 w-full p-4 z-10 text-white bg-blue-900 bg-opacity-70">
+    <div id="permission-container">
+      <h2>AR Location App</h2>
+      <p>Aplikasi ini memerlukan akses kamera dan lokasi untuk menampilkan AR</p>
+      <button id="permission-btn">Mulai AR</button>
+    </div>
+
+    <video id="camera-feed" autoplay playsinline></video>
+
+    <div id="ui-container" class="fixed top-0 left-0 w-full p-4 z-10 text-white bg-blue-900 bg-opacity-70" style="display: none">
       <h1 class="text-lg font-bold">Enhanced AR Location App</h1>
       <div id="location-info" class="text-sm">
         <p id="current-lat">lat: Mencari...</p>
@@ -45,27 +150,11 @@
       </div>
     </div>
 
-    <!-- Scene AR.js dengan pengaturan yang ditingkatkan -->
-    <a-scene
-      vr-mode-ui="enabled: false"
-      arjs="sourceType: webcam; debugUIEnabled: false; 
-            sourceWidth: window.innerWidth; sourceHeight: window.innerHeight;
-            trackingMethod: best; maxDetectionRate: 60;"
-    >
-      <!-- Kamera dengan pengaturan GPS yang diperbaiki -->
-      <a-camera gps-projected-camera="gpsMinDistance: 1; gpsTimeInterval: 100" rotation-reader look-controls-enabled="false"></a-camera>
-
-      <!-- Aset dan model -->
-      <a-assets>
-        <a-asset-item id="arrow-obj" src="https://cdn.glitch.global/f8a66d7c-a9be-4c5c-96f6-104070e76271/arrow.obj?v=1618590849906"></a-asset-item>
-      </a-assets>
-
-      <!-- Container untuk POI yang akan ditambahkan secara dinamis -->
-      <a-entity id="poi-container"></a-entity>
-    </a-scene>
-
     <!-- Container untuk elemen jarak -->
     <div id="distance-indicators"></div>
+
+    <!-- Container untuk AR points -->
+    <div id="ar-points-container"></div>
 
     <script>
       // Kode untuk points of interest
@@ -101,7 +190,31 @@
         maxDistance: 10000, // Jarak maksimum untuk skala minimum (dalam meter)
         visibleDistance: 10000, // Jarak maksimum objek terlihat (meter)
         pathUpdateInterval: 200, // Interval pembaruan path (ms)
+        cameraFOV: 60, // Field of view kamera dalam derajat
       };
+
+      // Elemen UI
+      const permissionContainer = document.getElementById("permission-container");
+      const permissionBtn = document.getElementById("permission-btn");
+      const uiContainer = document.getElementById("ui-container");
+      const cameraFeed = document.getElementById("camera-feed");
+      const latElement = document.getElementById("current-lat");
+      const lonElement = document.getElementById("current-lon");
+      const altElement = document.getElementById("current-alt");
+      const bearingElement = document.getElementById("bearing");
+      const nearestPoiElement = document.getElementById("nearest-poi");
+      const distanceIndicatorsContainer = document.getElementById("distance-indicators");
+      const arPointsContainer = document.getElementById("ar-points-container");
+
+      // Status aplikasi
+      let userPosition = { latitude: 0, longitude: 0, altitude: 0 };
+      let deviceHeading = 0;
+      let arPoints = {};
+      let distanceIndicators = {};
+      let cameraStream = null;
+      let hasPermissions = false;
+      let watchPositionId = null;
+      let deviceOrientationPermission = false;
 
       // Fungsi untuk menghitung jarak antara dua titik geografis
       function calculateDistance(lat1, lon1, lat2, lon2) {
@@ -139,32 +252,66 @@
         return (radians * 180) / Math.PI;
       }
 
-      // Elemen UI
-      const latElement = document.getElementById("current-lat");
-      const lonElement = document.getElementById("current-lon");
-      const altElement = document.getElementById("current-alt");
-      const bearingElement = document.getElementById("bearing");
-      const nearestPoiElement = document.getElementById("nearest-poi");
-      const distanceIndicatorsContainer = document.getElementById("distance-indicators");
+      // Meminta izin dan inisialisasi AR
+      permissionBtn.addEventListener("click", initializeAR);
 
-      // Status aplikasi
-      let userPosition = { latitude: 0, longitude: 0, altitude: 0 };
-      let deviceHeading = 0;
-      let poiEntities = {};
-      let pathEntities = {};
-      let distanceIndicators = {};
-      let lastUpdateTime = 0;
-
-      // Meminta izin lokasi dan memulai pelacakan
-      function initLocationTracking() {
-        if (navigator.geolocation) {
-          navigator.geolocation.watchPosition(updatePosition, handleLocationError, {
-            enableHighAccuracy: true,
-            maximumAge: 0,
-            timeout: 27000,
+      async function initializeAR() {
+        try {
+          // Meminta izin kamera
+          cameraStream = await navigator.mediaDevices.getUserMedia({
+            video: {
+              facingMode: "environment",
+              width: { ideal: window.innerWidth },
+              height: { ideal: window.innerHeight },
+            },
+            audio: false,
           });
-        } else {
-          alert("Geolocation tidak didukung oleh browser ini.");
+
+          cameraFeed.srcObject = cameraStream;
+
+          // Meminta izin lokasi
+          if (navigator.geolocation) {
+            watchPositionId = navigator.geolocation.watchPosition(updatePosition, handleLocationError, {
+              enableHighAccuracy: true,
+              maximumAge: 0,
+              timeout: 27000,
+            });
+          } else {
+            alert("Geolocation tidak didukung oleh browser ini.");
+          }
+
+          // Meminta izin sensor orientasi
+          if (window.DeviceOrientationEvent) {
+            if (typeof DeviceOrientationEvent.requestPermission === "function") {
+              // iOS 13+ memerlukan izin khusus
+              try {
+                const permissionState = await DeviceOrientationEvent.requestPermission();
+                if (permissionState === "granted") {
+                  deviceOrientationPermission = true;
+                  initDeviceOrientation();
+                } else {
+                  alert("Izin sensor orientasi ditolak.");
+                }
+              } catch (error) {
+                console.error("Error requesting device orientation permission:", error);
+                initDeviceOrientation(); // Coba inisialisasi tanpa izin khusus
+              }
+            } else {
+              // Platform lain tidak memerlukan izin khusus
+              deviceOrientationPermission = true;
+              initDeviceOrientation();
+            }
+          } else {
+            alert("Device orientation tidak didukung oleh browser ini.");
+          }
+
+          // Sembunyikan container izin dan tampilkan UI
+          permissionContainer.style.display = "none";
+          uiContainer.style.display = "block";
+          hasPermissions = true;
+        } catch (error) {
+          console.error("Error initializing AR:", error);
+          alert("Gagal mengakses kamera atau lokasi: " + error.message);
         }
       }
 
@@ -183,7 +330,7 @@
         altElement.textContent = `altitude: ${altitude.toFixed(2)}`;
 
         // Update POI pada scene
-        updatePOIEntities();
+        updateARPoints();
 
         // Tentukan POI terdekat
         updateNearestPOI();
@@ -216,21 +363,10 @@
         }
       }
 
-      // Menambahkan atau memperbarui POI pada scene
-      function updatePOIEntities() {
-        const currentTime = Date.now();
-        const shouldUpdatePaths = currentTime - lastUpdateTime > CONFIG.pathUpdateInterval;
-
-        if (shouldUpdatePaths) {
-          lastUpdateTime = currentTime;
-        }
-
-        const scene = document.querySelector("a-scene");
-        const container = document.getElementById("poi-container");
-
-        // Kelola POI
+      // Menambahkan atau memperbarui AR Points pada tampilan
+      function updateARPoints() {
         POINTS_OF_INTEREST.forEach((poi) => {
-          const id = `poi-${poi.name.replace(/\\s+/g, "-").toLowerCase()}`;
+          const id = `poi-${poi.name.replace(/\s+/g, "-").toLowerCase()}`;
 
           // Hitung jarak ke POI
           const distance = calculateDistance(userPosition.latitude, userPosition.longitude, poi.latitude, poi.longitude);
@@ -238,107 +374,105 @@
           // Hitung bearing ke POI
           const bearing = calculateBearing(userPosition.latitude, userPosition.longitude, poi.latitude, poi.longitude);
 
-          // Jika terlalu jauh, sembunyikan - tetapi tetap buat dan tampilkan
+          // Relatif bearing terhadap perangkat
+          const relativeBearing = (bearing - deviceHeading + 360) % 360;
+
+          // Tampilkan hanya jika dalam field of view kamera
+          const inFieldOfView = relativeBearing < CONFIG.cameraFOV / 2 || relativeBearing > 360 - CONFIG.cameraFOV / 2;
           const isVisible = distance <= CONFIG.visibleDistance;
 
-          // Buat atau perbarui entitas
-          if (!poiEntities[id]) {
-            // Buat entitas baru
-            const entity = document.createElement("a-entity");
-            entity.id = id;
-            entity.setAttribute("data-distance", distance);
-            entity.setAttribute("data-poi-name", poi.name);
+          if (!arPoints[id]) {
+            // Buat AR point baru
+            const arPoint = document.createElement("div");
+            arPoint.id = id;
+            arPoint.className = "ar-point";
+            arPoint.style.display = isVisible && inFieldOfView ? "flex" : "none";
 
-            // Marker utama (lingkaran dengan skala yang adaptif)
-            const marker = document.createElement("a-entity");
-            marker.id = `${id}-marker`;
+            // Marker
+            const marker = document.createElement("div");
+            marker.className = "ar-point-marker";
+            marker.style.backgroundColor = `${poi.color}33`;
+            marker.style.borderColor = poi.color;
 
-            // Lingkaran sebagai marker
-            const circle = document.createElement("a-circle");
-            circle.setAttribute("color", poi.color || "#FFFFFF");
-            circle.setAttribute("radius", "0.5");
-            circle.setAttribute("opacity", "0.9");
-            circle.setAttribute("material", "side: double");
-            circle.setAttribute("animation", "property: rotation; to: 0 360 0; loop: true; dur: 10000; easing: linear");
-            marker.appendChild(circle);
+            const innerMarker = document.createElement("div");
+            innerMarker.className = "ar-point-inner";
+            innerMarker.style.backgroundColor = poi.color;
 
-            // Lingkaran luar untuk efek pulsa
-            const outerCircle = document.createElement("a-circle");
-            outerCircle.setAttribute("color", poi.color || "#FFFFFF");
-            outerCircle.setAttribute("radius", "0.7");
-            outerCircle.setAttribute("opacity", "0.4");
-            outerCircle.setAttribute("material", "side: double");
-            outerCircle.setAttribute("animation", "property: scale; from: 0.8 0.8 0.8; to: 1.5 1.5 1.5; loop: true; dur: 2000; dir: alternate");
-            marker.appendChild(outerCircle);
+            marker.appendChild(innerMarker);
+            arPoint.appendChild(marker);
 
-            // Tambahkan teks nama lokasi
-            const text = document.createElement("a-text");
-            text.setAttribute("value", poi.name);
-            text.setAttribute("color", "white");
-            text.setAttribute("align", "center");
-            text.setAttribute("position", "0 1.2 0");
-            text.setAttribute("scale", "1 1 1");
-            text.setAttribute("side", "double");
-            text.setAttribute("font", "https://cdn.aframe.io/fonts/DejaVu-sdf.fnt");
-            marker.appendChild(text);
+            // Label nama
+            const label = document.createElement("div");
+            label.className = "ar-point-label";
+            label.textContent = poi.name;
+            arPoint.appendChild(label);
 
-            // Tambahkan teks jarak
-            const distanceText = document.createElement("a-text");
-            distanceText.id = `${id}-distance-text`;
-            distanceText.setAttribute("value", formatDistance(distance));
-            distanceText.setAttribute("color", "white");
-            distanceText.setAttribute("align", "center");
-            distanceText.setAttribute("position", "0 0.7 0");
-            distanceText.setAttribute("scale", "0.8 0.8 0.8");
-            distanceText.setAttribute("side", "double");
-            marker.appendChild(distanceText);
+            // Label jarak
+            const distanceLabel = document.createElement("div");
+            distanceLabel.className = "ar-point-distance";
+            distanceLabel.textContent = formatDistance(distance);
+            arPoint.appendChild(distanceLabel);
 
-            entity.appendChild(marker);
-
-            // Set posisi GPS dengan altitude untuk stabilitas
-            entity.setAttribute("gps-projected-entity-place", `latitude: ${poi.latitude}; longitude: ${poi.longitude}; altitude: ${poi.altitude || 0}`);
-
-            // Look at camera - membuat objek selalu menghadap pengguna
-            entity.setAttribute("look-at", "[gps-projected-camera]");
-
-            // Tambahkan ke container
-            container.appendChild(entity);
+            arPointsContainer.appendChild(arPoint);
 
             // Simpan referensi
-            poiEntities[id] = {
-              entity,
-              marker,
-              distanceText,
-              distance,
-              bearing,
+            arPoints[id] = {
+              element: arPoint,
+              distanceLabel: distanceLabel,
+              distance: distance,
+              bearing: bearing,
             };
 
             // Buat indikator jarak di UI
             createDistanceIndicator(id, poi);
           } else {
-            // Perbarui entitas yang sudah ada
-            const poiData = poiEntities[id];
-            poiData.distance = distance;
-            poiData.bearing = bearing;
+            // Perbarui AR point yang sudah ada
+            const arPoint = arPoints[id];
+            arPoint.distance = distance;
+            arPoint.bearing = bearing;
 
             // Perbarui teks jarak
-            const distanceText = document.getElementById(`${id}-distance-text`);
-            if (distanceText) {
-              distanceText.setAttribute("value", formatDistance(distance));
-            }
+            arPoint.distanceLabel.textContent = formatDistance(distance);
+
+            // Tampilkan/sembunyikan berdasarkan field of view
+            arPoint.element.style.display = isVisible && inFieldOfView ? "flex" : "none";
 
             // Perbarui indikator jarak di UI
             updateDistanceIndicator(id, poi, distance, bearing);
           }
 
-          // Sesuaikan skala berdasarkan jarak
-          updateEntityScale(id, distance);
-
-          // Perbarui path jika diperlukan
-          if (shouldUpdatePaths) {
-            updatePathToEntity(id, poi, distance, bearing);
+          // Posisikan AR point berdasarkan bearing relatif
+          if (isVisible && inFieldOfView) {
+            positionARPoint(id, relativeBearing, distance);
           }
         });
+      }
+
+      // Posisikan AR point di layar berdasarkan bearing relatif
+      function positionARPoint(id, relativeBearing, distance) {
+        const arPoint = arPoints[id];
+        if (!arPoint || !arPoint.element) return;
+
+        // Konversi bearing relatif ke posisi horizontal pada layar (0-1)
+        let screenX;
+        if (relativeBearing < CONFIG.cameraFOV / 2) {
+          // Dalam field of view depan
+          screenX = 0.5 + relativeBearing / CONFIG.cameraFOV;
+        } else {
+          // Dalam field of view belakang
+          screenX = (relativeBearing - 360) / CONFIG.cameraFOV + 0.5;
+        }
+
+        // Buat sedikit ketinggian berdasarkan jarak
+        const verticalPosition = 0.5 - 0.1 * Math.min(distance / 1000, 0.3);
+
+        // Sesuaikan skala berdasarkan jarak
+        const scale = CONFIG.minScale + (CONFIG.maxScale - CONFIG.minScale) * (1 - Math.min(Math.max(distance - CONFIG.minDistance, 0) / (CONFIG.maxDistance - CONFIG.minDistance), 1));
+
+        // Terapkan posisi dan skala
+        arPoint.element.style.left = `${screenX * 100}%`;
+        arPoint.element.style.top = `${verticalPosition * 100}%`;
+        arPoint.element.style.transform = `translate(-50%, -50%) scale(${scale})`;
       }
 
       // Memformat jarak untuk tampilan
@@ -350,93 +484,18 @@
         }
       }
 
-      // Memperbarui skala entitas berdasarkan jarak
-      function updateEntityScale(id, distance) {
-        const entity = poiEntities[id];
-        if (!entity || !entity.marker) return;
-
-        // Hitung skala berdasarkan jarak, inversi yaitu semakin dekat semakin besar
-        let scale = CONFIG.minScale + (CONFIG.maxScale - CONFIG.minScale) * (1 - Math.min(Math.max(distance - CONFIG.minDistance, 0) / (CONFIG.maxDistance - CONFIG.minDistance), 1));
-
-        // Terapkan skala ke marker
-        entity.marker.setAttribute("scale", `${scale} ${scale} ${scale}`);
-      }
-
-      // Membuat atau memperbarui jalur ke entitas
-      function updatePathToEntity(id, poi, distance, bearing) {
-        // Jika terlalu jauh, jangan tampilkan jalur
-        if (distance > CONFIG.visibleDistance) {
-          if (pathEntities[id]) {
-            pathEntities[id].remove();
-            delete pathEntities[id];
-          }
-          return;
-        }
-
-        // Hitung posisi untuk jalur
-        const pathLength = Math.min(distance, 50); // Batasi panjang jalur maksimal 50m
-
-        // Hitung arah jalur berdasarkan bearing relatif ke arah kamera
-        const relativeBearing = (bearing - deviceHeading + 360) % 360;
-        const radianBearing = toRadians(relativeBearing);
-
-        // Jalur (garis) dari pengguna ke POI
-        if (!pathEntities[id]) {
-          const path = document.createElement("a-entity");
-          path.id = `path-${id}`;
-
-          // Buat garis dari posisi kamera
-          const line = document.createElement("a-entity");
-          line.setAttribute("line", {
-            start: { x: 0, y: -1, z: 0 },
-            end: {
-              x: (Math.sin(radianBearing) * pathLength) / 10,
-              y: -1,
-              z: (-Math.cos(radianBearing) * pathLength) / 10,
-            },
-            color: poi.color || "#FFFFFF",
-            opacity: 0.6,
-            dashed: true,
-          });
-
-          path.appendChild(line);
-
-          // Tambahkan ke scene dari posisi kamera
-          document.querySelector("a-camera").appendChild(path);
-
-          // Simpan referensi
-          pathEntities[id] = path;
-        } else {
-          // Perbarui jalur yang sudah ada
-          const line = pathEntities[id].querySelector("[line]");
-          if (line) {
-            line.setAttribute("line", {
-              start: { x: 0, y: -1, z: 0 },
-              end: {
-                x: (Math.sin(radianBearing) * pathLength) / 10,
-                y: -1,
-                z: (-Math.cos(radianBearing) * pathLength) / 10,
-              },
-              color: poi.color || "#FFFFFF",
-              opacity: 0.6,
-              dashed: true,
-            });
-          }
-        }
-      }
-
       // Membuat indikator jarak di UI
       function createDistanceIndicator(id, poi) {
         const indicator = document.createElement("div");
         indicator.id = `indicator-${id}`;
         indicator.className = "distance-indicator";
         indicator.style.backgroundColor = poi.color || "#3366FF";
-        indicator.textContent = `${poi.name}: ${formatDistance(poiEntities[id].distance)}`;
+        indicator.textContent = `${poi.name}: ${formatDistance(arPoints[id].distance)}`;
 
         distanceIndicatorsContainer.appendChild(indicator);
         distanceIndicators[id] = indicator;
 
-        updateDistanceIndicator(id, poi, poiEntities[id].distance, poiEntities[id].bearing);
+        updateDistanceIndicator(id, poi, arPoints[id].distance, arPoints[id].bearing);
       }
 
       // Memperbarui indikator jarak di UI
@@ -479,7 +538,7 @@
               let heading = 360 - event.alpha;
 
               // Kompensasi orientasi layar
-              const screenOrientation = window.orientation || 0;
+              const screenOrientation = window.screen.orientation ? window.screen.orientation.angle : window.orientation || 0;
               heading = (heading + screenOrientation) % 360;
 
               // Simpan heading saat ini
@@ -488,8 +547,10 @@
               // Update UI
               bearingElement.textContent = `Bearing: ${heading.toFixed(1)}°`;
 
-              // Perbarui indikator arah
-              updateDirectionIndicators();
+              // Perbarui AR points jika posisi sudah tersedia
+              if (userPosition.latitude !== 0 && userPosition.longitude !== 0) {
+                updateARPoints();
+              }
             }
           });
         } else {
@@ -497,42 +558,23 @@
         }
       }
 
-      // Perbarui semua indikator arah
-      function updateDirectionIndicators() {
-        Object.keys(poiEntities).forEach((id) => {
-          const poiData = poiEntities[id];
-          updateDistanceIndicator(
-            id,
-            POINTS_OF_INTEREST.find((p) => p.name === poiData.entity.getAttribute("data-poi-name")),
-            poiData.distance,
-            poiData.bearing
-          );
-
-          // Perbarui jalur jika ada
-          if (pathEntities[id]) {
-            const poiInfo = POINTS_OF_INTEREST.find((p) => p.name === poiData.entity.getAttribute("data-poi-name"));
-            updatePathToEntity(id, poiInfo, poiData.distance, poiData.bearing);
-          }
-        });
-      }
-
       // Perbarui ukuran layar ketika orientasi berubah
       window.addEventListener("resize", function () {
-        updateDirectionIndicators();
+        if (hasPermissions && userPosition.latitude !== 0 && userPosition.longitude !== 0) {
+          updateARPoints();
+        }
       });
 
-      // Mulai ketika halaman selesai dimuat
-      window.onload = function () {
-        initLocationTracking();
-        initDeviceOrientation();
+      // Cleanup ketika halaman ditutup
+      window.addEventListener("beforeunload", function () {
+        if (cameraStream) {
+          cameraStream.getTracks().forEach((track) => track.stop());
+        }
 
-        // Atur interval pembaruan untuk menjaga konten tetap segar
-        setInterval(() => {
-          if (userPosition.latitude && userPosition.longitude) {
-            updatePOIEntities();
-          }
-        }, 1000);
-      };
+        if (watchPositionId !== null) {
+          navigator.geolocation.clearWatch(watchPositionId);
+        }
+      });
     </script>
   </body>
 </html>
