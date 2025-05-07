@@ -2,16 +2,29 @@
 <html lang="id">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, maximum-scale=1.0" />
     <title>AR Berbasis Lokasi</title>
 
     <!-- Import A-Frame terlebih dahulu -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/aframe/1.3.0/aframe.min.js"></script>
-    <!-- Import AR.js SETELAH A-Frame -->
-    <script src="https://raw.githack.com/AR-js-org/AR.js/master/aframe/build/aframe-ar-nft.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/tailwindcss/2.2.19/tailwind.min.js"></script>
+    <script src="https://aframe.io/releases/1.3.0/aframe.min.js"></script>
+    <!-- Import AR.js dengan dependensi yang benar -->
+    <script src="https://raw.githack.com/AR-js-org/AR.js/master/aframe/build/aframe-ar.js"></script>
 
     <style>
+      body {
+        margin: 0;
+        padding: 0;
+        overflow: hidden;
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        -webkit-user-select: none;
+        user-select: none;
+        background-color: transparent;
+      }
+
       .arjs-loader {
         position: fixed;
         top: 0;
@@ -24,6 +37,7 @@
         z-index: 999;
         background-color: rgba(0, 0, 0, 0.8);
         color: white;
+        font-family: Arial, sans-serif;
       }
 
       .info-panel {
@@ -36,6 +50,7 @@
         color: white;
         font-family: Arial, sans-serif;
         z-index: 10;
+        font-size: 14px;
       }
 
       .distance-indicator {
@@ -77,6 +92,7 @@
         color: white;
         font-size: 12px;
         z-index: 8;
+        text-align: center;
       }
     </style>
   </head>
@@ -92,23 +108,26 @@
       <div id="bearingInfo">Arah: --°</div>
     </div>
 
-    <!-- Tombol izin kamera dan lokasi - TIDAK HIDDEN BY DEFAULT -->
+    <!-- Tombol izin kamera dan lokasi -->
     <button id="permissionButton">Mulai AR - Izinkan Kamera & Lokasi</button>
 
     <!-- Debug Info -->
     <div id="debugInfo">Status: Menunggu interaksi pengguna</div>
 
-    <!-- Scene A-Frame -->
-    <a-scene vr-mode-ui="enabled: false" embedded arjs="sourceType: webcam; videoTexture: true; debugUIEnabled: false;" renderer="logarithmicDepthBuffer: true; antialias: true" loading-screen="enabled: false">
-      <!-- Kamera dengan rotation-reader untuk mendapatkan rotasi perangkat -->
-      <a-camera id="camera" gps-projected-camera="simulateLatitude: 16.0404856; simulateLongitude: 108.2262447" rotation-reader look-controls="reverseMouseDrag: false"></a-camera>
-    </a-scene>
+    <!-- A-Frame Scene - HIDDEN BY DEFAULT -->
+    <div id="scene-container" style="display: none">
+      <a-scene vr-mode-ui="enabled: false" embedded arjs="sourceType: webcam; debugUIEnabled: false; detectionMode: mono_and_matrix;" renderer="logarithmicDepthBuffer: true; antialias: true" loading-screen="enabled: false">
+        <!-- Kamera dengan rotation-reader untuk mendapatkan rotasi perangkat -->
+        <a-entity camera></a-entity>
+      </a-scene>
+    </div>
 
     <script>
       // Daftar Points of Interest (koordinat dalam format latitude, longitude)
       const poisData = [
-        { name: "Sun Wheel", lat: 16.0404856, lon: 108.2262447, alt: 0 },
-        { name: "Linh Ung Pagoda", lat: 16.1072989, lon: 108.2343984, alt: 0 },
+        { name: "Rumah Thanos", lat: -6.986781, lon: 107.6478585, alt: 684 },
+        { name: "Gedung Basics tower 1", lat: -6.881909, lon: 107.611547, alt: 830 },
+        { name: "Masjid BRIN", lat: -6.882004, lon: 107.6111434, alt: 830 },
         // Tambahkan POI lain di sini
       ];
 
@@ -119,7 +138,6 @@
       const pois = {};
       const distanceIndicators = {};
       let appInitialized = false;
-      let camera = null;
 
       // Ambil referensi ke elemen-elemen
       const permissionButton = document.getElementById("permissionButton");
@@ -127,6 +145,7 @@
       const locationInfo = document.getElementById("locationInfo");
       const bearingInfo = document.getElementById("bearingInfo");
       const arjsLoader = document.querySelector(".arjs-loader");
+      const sceneContainer = document.getElementById("scene-container");
 
       // Fungsi untuk memperbarui informasi debug
       function updateDebugInfo(message) {
@@ -142,10 +161,10 @@
         }
 
         locationInfo.innerHTML = `
-                lat: ${position.coords.latitude.toFixed(7)}<br>
-                lon: ${position.coords.longitude.toFixed(7)}<br>
-                altitude: ${position.coords.altitude ? position.coords.altitude.toFixed(2) : "N/A"}
-            `;
+          lat: ${position.coords.latitude.toFixed(7)}<br>
+          lon: ${position.coords.longitude.toFixed(7)}<br>
+          altitude: ${position.coords.altitude ? position.coords.altitude.toFixed(2) : "N/A"}
+        `;
 
         // Update jarak ke semua POIs
         updateDistances(position);
@@ -192,8 +211,7 @@
         poisData.forEach((poi) => {
           // Buat entity untuk POI
           const entity = document.createElement("a-entity");
-          entity.setAttribute("gps-projected-entity-place", `latitude: ${poi.lat}; longitude: ${poi.lon}`);
-          entity.setAttribute("look-at", "#camera");
+          entity.setAttribute("position", `${(poi.lon - currentPosition.coords.longitude) * 1000} 0 ${-(poi.lat - currentPosition.coords.latitude) * 1000}`);
           entity.setAttribute("scale", "1 1 1");
           entity.setAttribute("id", `poi-${poi.name.replace(/\s+/g, "-").toLowerCase()}`);
 
@@ -248,6 +266,38 @@
         bearingInfo.textContent = `Arah: ${Math.round(compassHeading)}°`;
       }
 
+      // Inisialisasi A-Frame scene dan menampilkan kamera
+      function initializeARScene() {
+        updateDebugInfo("Menginisialisasi scene AR");
+
+        // Tampilkan kontainer scene
+        sceneContainer.style.display = "block";
+
+        // Tunggu sebentar untuk memastikan A-Frame scene dirender dengan benar
+        setTimeout(() => {
+          const scene = document.querySelector("a-scene");
+          if (scene) {
+            updateDebugInfo("Scene AR berhasil diinisialisasi");
+
+            // Cek apakah canvas sudah dibuat
+            const canvas = document.querySelector(".a-canvas");
+            if (canvas) {
+              canvas.style.width = "100vw";
+              canvas.style.height = "100vh";
+              canvas.style.position = "fixed";
+              canvas.style.top = "0";
+              canvas.style.left = "0";
+              canvas.style.zIndex = "1";
+              updateDebugInfo("Canvas AR berhasil disesuaikan");
+            } else {
+              updateDebugInfo("PERINGATAN: Canvas AR tidak ditemukan");
+            }
+          } else {
+            updateDebugInfo("PERINGATAN: Scene AR tidak ditemukan");
+          }
+        }, 1000);
+      }
+
       // Mulai geolokasi dan layanan lainnya
       function startARExperience() {
         updateDebugInfo("Memulai pengalaman AR");
@@ -258,19 +308,11 @@
         // Sembunyikan tombol izin
         permissionButton.style.display = "none";
 
-        // Ambil referensi ke kamera
-        camera = document.getElementById("camera");
-
-        if (!camera) {
-          updateDebugInfo("Kamera AR tidak ditemukan");
-          return;
-        }
+        // Inisialisasi A-Frame scene dan tampilkan kamera
+        initializeARScene();
 
         // Minta lokasi pengguna
         startGeolocation();
-
-        // Setup POIs
-        setupPOIs();
 
         // Register untuk device orientation
         startOrientationTracking();
@@ -302,11 +344,8 @@
               currentPosition = position;
               updateLocationInfo(position);
 
-              // Update kamera dengan posisi GPS sebenarnya
-              if (camera) {
-                camera.removeAttribute("gps-projected-camera");
-                camera.setAttribute("gps-projected-camera", `simulateLatitude: ${position.coords.latitude}; simulateLongitude: ${position.coords.longitude}`);
-              }
+              // Setup POIs setelah mendapatkan lokasi
+              setupPOIs();
 
               // Memulai pengawasan posisi berkelanjutan
               watchId = navigator.geolocation.watchPosition(
@@ -349,6 +388,8 @@
               })
               .catch((error) => {
                 updateDebugInfo(`Error izin orientasi: ${error.message}`);
+                // Coba tambahkan event listener meskipun ada error
+                window.addEventListener("deviceorientation", handleOrientation, true);
               });
           } else {
             // Handle regular non-iOS 13+ devices
@@ -371,12 +412,9 @@
           // Untuk perangkat iOS, minta izin kamera terlebih dahulu
           if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
             navigator.mediaDevices
-              .getUserMedia({ video: true })
+              .getUserMedia({ video: { facingMode: "environment" } })
               .then(function (stream) {
-                // Hentikan stream setelah izin diberikan
-                stream.getTracks().forEach((track) => track.stop());
                 updateDebugInfo("Izin kamera diberikan");
-
                 // Lanjut ke memulai AR
                 startARExperience();
               })
@@ -389,25 +427,38 @@
             startARExperience(); // Coba memulai AR tanpa izin kamera eksplisit
           }
         });
-
-        // Tambahkan listener untuk event AR.js loaded
-        document.querySelector("a-scene").addEventListener("loaded", function () {
-          updateDebugInfo("A-Scene loaded. Siap untuk memulai AR");
-        });
       });
 
       // Handling untuk fullscreen
       document.addEventListener("dblclick", () => {
-        const scene = document.querySelector("a-scene");
-        if (scene.requestFullscreen) {
-          scene.requestFullscreen();
-        } else if (scene.mozRequestFullScreen) {
-          scene.mozRequestFullScreen();
-        } else if (scene.webkitRequestFullscreen) {
-          scene.webkitRequestFullscreen();
-        } else if (scene.msRequestFullscreen) {
-          scene.msRequestFullscreen();
+        const sceneEl = document.querySelector("a-scene");
+        if (!sceneEl) return;
+
+        if (document.fullscreenElement) {
+          // Jika sudah fullscreen, tidak perlu melakukan apa-apa
+          return;
         }
+
+        if (sceneEl.requestFullscreen) {
+          sceneEl.requestFullscreen();
+        } else if (sceneEl.mozRequestFullScreen) {
+          sceneEl.mozRequestFullScreen();
+        } else if (sceneEl.webkitRequestFullscreen) {
+          sceneEl.webkitRequestFullscreen();
+        } else if (sceneEl.msRequestFullscreen) {
+          sceneEl.msRequestFullscreen();
+        }
+      });
+
+      // Deteksi rotasi layar
+      window.addEventListener("orientationchange", function () {
+        setTimeout(() => {
+          const canvas = document.querySelector(".a-canvas");
+          if (canvas) {
+            canvas.style.width = "100vw";
+            canvas.style.height = "100vh";
+          }
+        }, 200);
       });
     </script>
   </body>
