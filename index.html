@@ -94,6 +94,15 @@
         z-index: 8;
         text-align: center;
       }
+
+      .a-canvas {
+        width: 100% !important;
+        height: 100% !important;
+        position: fixed !important;
+        top: 0 !important;
+        left: 0 !important;
+        z-index: 1 !important;
+      }
     </style>
   </head>
   <body>
@@ -118,7 +127,7 @@
     <div id="scene-container" style="display: none">
       <a-scene vr-mode-ui="enabled: false" embedded arjs="sourceType: webcam; debugUIEnabled: false; detectionMode: mono_and_matrix;" renderer="logarithmicDepthBuffer: true; antialias: true" loading-screen="enabled: false">
         <!-- Kamera dengan rotation-reader untuk mendapatkan rotasi perangkat -->
-        <a-entity camera></a-entity>
+        <a-entity camera look-controls></a-entity>
       </a-scene>
     </div>
 
@@ -128,7 +137,9 @@
         { name: "Rumah Thanos", lat: -6.986781, lon: 107.6478585, alt: 684 },
         { name: "Gedung Basics tower 1", lat: -6.881909, lon: 107.611547, alt: 830 },
         { name: "Masjid BRIN", lat: -6.882004, lon: 107.6111434, alt: 830 },
-        // Tambahkan POI lain di sini
+        // POI dari gambar
+        { name: "Sun Wheel", lat: 16.0404856, lon: 108.2262447, alt: 0 },
+        { name: "Linh Ung Pagoda", lat: 16.1072989, lon: 108.2343984, alt: 0 },
       ];
 
       // Variabel untuk menyimpan referensi
@@ -184,23 +195,70 @@
         return R * c; // jarak dalam meter
       }
 
+      // Menghitung bearing antara dua titik koordinat
+      function calculateBearing(lat1, lon1, lat2, lon2) {
+        lat1 = (lat1 * Math.PI) / 180;
+        lon1 = (lon1 * Math.PI) / 180;
+        lat2 = (lat2 * Math.PI) / 180;
+        lon2 = (lon2 * Math.PI) / 180;
+
+        const y = Math.sin(lon2 - lon1) * Math.cos(lat2);
+        const x = Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(lon2 - lon1);
+        const bearing = Math.atan2(y, x);
+
+        return ((bearing * 180) / Math.PI + 360) % 360; // dalam derajat
+      }
+
       // Fungsi untuk mengupdate jarak ke semua POIs
       function updateDistances(position) {
         poisData.forEach((poi) => {
           const distance = calculateDistance(position.coords.latitude, position.coords.longitude, poi.lat, poi.lon);
+          const bearing = calculateBearing(position.coords.latitude, position.coords.longitude, poi.lat, poi.lon);
 
           // Update indikator jarak jika sudah ada
           if (distanceIndicators[poi.name]) {
-            distanceIndicators[poi.name].textContent = `${poi.name}: ${distance.toFixed(0)}m`;
+            distanceIndicators[poi.name].textContent = `${poi.name}: ${distance.toFixed(0)}m, Bearing: ${bearing.toFixed(0)}°`;
           }
 
-          // Update ukuran entitas berdasarkan jarak
+          // Update ukuran dan posisi entitas berdasarkan jarak
           if (pois[poi.name]) {
             // Semakin dekat semakin besar, dengan batas minimum dan maksimum
             const scale = Math.min(Math.max(20 / (distance / 100), 0.5), 5);
             pois[poi.name].setAttribute("scale", `${scale} ${scale} ${scale}`);
+
+            // Update posisi berdasarkan rotasi kompas
+            updatePoiPosition(poi, distance, bearing);
           }
         });
+      }
+
+      // Fungsi untuk mengupdate posisi POI berdasarkan kompas
+      function updatePoiPosition(poi, distance, bearing) {
+        if (!pois[poi.name]) return;
+
+        // Konversi bearing ke radians
+        const bearingRad = (bearing * Math.PI) / 180;
+
+        // Hitung posisi relatif terhadap pengguna (dalam koordinat scene A-Frame)
+        // Faktor skala untuk mengonversi meter ke unit A-Frame
+        const scale = 0.1;
+        const scaledDistance = distance * scale;
+
+        // Hitung posisi X (timur/barat) dan Z (utara/selatan) berdasarkan bearing
+        const x = Math.sin(bearingRad) * scaledDistance;
+        const z = -Math.cos(bearingRad) * scaledDistance;
+
+        // Hitung elevasi (y) berdasarkan perbedaan ketinggian
+        let y = 0;
+        if (currentPosition && currentPosition.coords.altitude && poi.alt) {
+          y = (poi.alt - currentPosition.coords.altitude) * scale;
+        }
+
+        // Set posisi entity
+        pois[poi.name].setAttribute("position", `${x} ${y} ${z}`);
+
+        // Pastikan entitas selalu menghadap kamera
+        pois[poi.name].setAttribute("look-at", "[camera]");
       }
 
       // Fungsi untuk mengatur POIs dan indikator jarak
@@ -211,15 +269,14 @@
         poisData.forEach((poi) => {
           // Buat entity untuk POI
           const entity = document.createElement("a-entity");
-          entity.setAttribute("position", `${(poi.lon - currentPosition.coords.longitude) * 1000} 0 ${-(poi.lat - currentPosition.coords.latitude) * 1000}`);
-          entity.setAttribute("scale", "1 1 1");
           entity.setAttribute("id", `poi-${poi.name.replace(/\s+/g, "-").toLowerCase()}`);
 
-          // Tambahkan lingkaran sebagai marker
+          // Tambahkan lingkaran sebagai marker dengan material emissive untuk terlihat jelas
           const circle = document.createElement("a-circle");
           circle.setAttribute("radius", "1.5");
           circle.setAttribute("color", "#00BFFF");
           circle.setAttribute("opacity", "0.8");
+          circle.setAttribute("material", "emissive: #00BFFF; emissiveIntensity: 0.5");
           entity.appendChild(circle);
 
           // Tambahkan teks nama POI
@@ -230,6 +287,7 @@
           text.setAttribute("scale", "2 2 2");
           text.setAttribute("color", "white");
           text.setAttribute("side", "double");
+          text.setAttribute("wrap-count", "15");
           entity.appendChild(text);
 
           // Tambahkan entity ke scene
@@ -244,11 +302,6 @@
           distanceIndicator.textContent = `${poi.name}: --m`;
           document.body.appendChild(distanceIndicator);
           distanceIndicators[poi.name] = distanceIndicator;
-
-          // Tambahkan garis penunjuk arah
-          const line = document.createElement("a-entity");
-          line.setAttribute("line", "start: 0 0 0; end: 0 0 -5; color: #00BFFF");
-          entity.appendChild(line);
         });
       }
 
@@ -259,11 +312,20 @@
           compassHeading = event.webkitCompassHeading;
         } else if (event.alpha) {
           // Untuk Android
-          compassHeading = event.alpha;
+          compassHeading = 360 - event.alpha; // Konversi ke format kompas standar
         }
 
         // Update tampilan arah
         bearingInfo.textContent = `Arah: ${Math.round(compassHeading)}°`;
+
+        // Update posisi POI secara real-time berdasarkan orientasi
+        if (currentPosition) {
+          poisData.forEach((poi) => {
+            const distance = calculateDistance(currentPosition.coords.latitude, currentPosition.coords.longitude, poi.lat, poi.lon);
+            const bearing = calculateBearing(currentPosition.coords.latitude, currentPosition.coords.longitude, poi.lat, poi.lon);
+            updatePoiPosition(poi, distance, bearing);
+          });
+        }
       }
 
       // Inisialisasi A-Frame scene dan menampilkan kamera
@@ -282,13 +344,14 @@
             // Cek apakah canvas sudah dibuat
             const canvas = document.querySelector(".a-canvas");
             if (canvas) {
+              // Pastikan canvas mengisi seluruh layar
               canvas.style.width = "100vw";
               canvas.style.height = "100vh";
               canvas.style.position = "fixed";
               canvas.style.top = "0";
               canvas.style.left = "0";
               canvas.style.zIndex = "1";
-              updateDebugInfo("Canvas AR berhasil disesuaikan");
+              updateDebugInfo("Canvas AR berhasil disesuaikan untuk memenuhi layar");
             } else {
               updateDebugInfo("PERINGATAN: Canvas AR tidak ditemukan");
             }
@@ -401,6 +464,27 @@
         }
       }
 
+      // Update posisi indikator jarak dalam tampilan
+      function updateDistanceIndicatorPositions() {
+        if (!currentPosition) return;
+
+        Object.keys(distanceIndicators).forEach((poiName) => {
+          const poi = poisData.find((p) => p.name === poiName);
+          if (!poi || !pois[poiName]) return;
+
+          // Dapatkan posisi 3D dari entitas dalam scene
+          const entity = pois[poiName];
+
+          // Posisikan indikator jarak di dekat label POI
+          const indicator = distanceIndicators[poiName];
+          const distance = calculateDistance(currentPosition.coords.latitude, currentPosition.coords.longitude, poi.lat, poi.lon);
+
+          // Sesuaikan posisi indikator jarak pada layar
+          indicator.style.top = `${window.innerHeight * 0.3 + Object.keys(distanceIndicators).indexOf(poiName) * 40}px`;
+          indicator.style.left = `${window.innerWidth / 2}px`;
+        });
+      }
+
       // Inisialisasi saat dokumen dimuat
       document.addEventListener("DOMContentLoaded", function () {
         updateDebugInfo("DOM loaded, menunggu interaksi user");
@@ -427,6 +511,9 @@
             startARExperience(); // Coba memulai AR tanpa izin kamera eksplisit
           }
         });
+
+        // Update posisi indikator jarak secara berkala
+        setInterval(updateDistanceIndicatorPositions, 1000);
       });
 
       // Handling untuk fullscreen
@@ -458,7 +545,18 @@
             canvas.style.width = "100vw";
             canvas.style.height = "100vh";
           }
+          updateDistanceIndicatorPositions();
         }, 200);
+      });
+
+      // Tambahan: Resize event untuk memastikan layar selalu terisi penuh
+      window.addEventListener("resize", function () {
+        const canvas = document.querySelector(".a-canvas");
+        if (canvas) {
+          canvas.style.width = "100vw";
+          canvas.style.height = "100vh";
+        }
+        updateDistanceIndicatorPositions();
       });
     </script>
   </body>
