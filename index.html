@@ -1,0 +1,198 @@
+<!-- index.html -->
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+    <title>AR Location App</title>
+    <script src="https://aframe.io/releases/1.2.0/aframe.min.js"></script>
+    <script src="https://raw.githack.com/AR-js-org/AR.js/master/aframe/build/aframe-ar.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        overflow: hidden;
+        margin: 0;
+        padding: 0;
+      }
+
+      #ui-container {
+        text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.8);
+      }
+    </style>
+  </head>
+  <body>
+    <div id="ui-container" class="absolute top-0 left-0 w-full p-4 z-10 text-white bg-blue-900 bg-opacity-70">
+      <h1 class="text-lg font-bold">AR Location-based</h1>
+      <div id="location-info" class="text-sm">
+        <p id="current-lat">lat: Mencari...</p>
+        <p id="current-lon">lon: Mencari...</p>
+        <p id="current-alt">altitude: Mencari...</p>
+      </div>
+      <div id="bearing-info" class="text-sm">
+        <p id="bearing">Bearing: Mencari...</p>
+      </div>
+    </div>
+
+    <!-- Scene AR.js -->
+    <a-scene vr-mode-ui="enabled: false" arjs="sourceType: webcam; debugUIEnabled: false; sourceWidth: window.innerWidth; sourceHeight: window.innerHeight;">
+      <!-- Define kamera dengan GPS -->
+      <a-camera gps-projected-camera rotation-reader></a-camera>
+
+      <!-- POI akan ditambahkan secara dinamis oleh JavaScript -->
+    </a-scene>
+
+    <script>
+      // Kode untuk points of interest
+      const POINTS_OF_INTEREST = [
+        {
+          name: "Rumah Irfan",
+          latitude: -6.986781,
+          longitude: 107.647585,
+          altitude: 0,
+        },
+        {
+          name: "Linh Ung Pagoda",
+          latitude: 16.1072989,
+          longitude: 108.2343984,
+          altitude: 0,
+        },
+      ];
+
+      // Fungsi untuk menghitung jarak antara dua titik geografis
+      function calculateDistance(lat1, lon1, lat2, lon2) {
+        const R = 6371e3; // Radius bumi dalam meter
+        const φ1 = toRadians(lat1);
+        const φ2 = toRadians(lat2);
+        const Δφ = toRadians(lat2 - lat1);
+        const Δλ = toRadians(lon2 - lon1);
+
+        const a = Math.sin(Δφ / 2) * Math.sin(Δφ / 2) + Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
+        const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+        return R * c;
+      }
+
+      function toRadians(degrees) {
+        return (degrees * Math.PI) / 180;
+      }
+
+      // Elemen UI
+      const latElement = document.getElementById("current-lat");
+      const lonElement = document.getElementById("current-lon");
+      const altElement = document.getElementById("current-alt");
+      const bearingElement = document.getElementById("bearing");
+
+      // Meminta izin lokasi dan memulai pelacakan
+      function initLocationTracking() {
+        if (navigator.geolocation) {
+          navigator.geolocation.watchPosition(updatePosition, handleLocationError, {
+            enableHighAccuracy: true,
+            maximumAge: 0,
+            timeout: 27000,
+          });
+        } else {
+          alert("Geolocation tidak didukung oleh browser ini.");
+        }
+      }
+
+      // Memperbarui posisi dan POI
+      function updatePosition(position) {
+        const latitude = position.coords.latitude;
+        const longitude = position.coords.longitude;
+        const altitude = position.coords.altitude || 0;
+
+        // Update UI dengan informasi lokasi
+        latElement.textContent = `lat: ${latitude.toFixed(7)}`;
+        lonElement.textContent = `lon: ${longitude.toFixed(7)}`;
+        altElement.textContent = `altitude: ${altitude.toFixed(2)}`;
+
+        // Update POI pada scene
+        updatePOIEntities(latitude, longitude);
+      }
+
+      // Menangani kesalahan lokasi
+      function handleLocationError(error) {
+        console.error("Error getting location:", error);
+        alert(`Tidak dapat mengakses lokasi: ${error.message}`);
+      }
+
+      // Menambahkan atau memperbarui POI pada scene
+      function updatePOIEntities(userLat, userLon) {
+        const scene = document.querySelector("a-scene");
+        const camera = document.querySelector("a-camera");
+
+        // Perbarui atribut kamera
+        camera.setAttribute("gps-projected-camera", "");
+
+        // Kelola POI
+        POINTS_OF_INTEREST.forEach((poi) => {
+          const id = `poi-${poi.name.replace(/\s+/g, "-").toLowerCase()}`;
+          let entity = document.getElementById(id);
+
+          // Hitung jarak ke POI
+          const distance = calculateDistance(userLat, userLon, poi.latitude, poi.longitude);
+
+          // Jika terlalu jauh (lebih dari 2km), hapus atau jangan tampilkan
+          if (distance > 2000) {
+            if (entity) entity.remove();
+            return;
+          }
+
+          // Buat entitas baru jika belum ada
+          if (!entity) {
+            entity = document.createElement("a-entity");
+            entity.id = id;
+
+            // Buat lingkaran sebagai penanda
+            const circle = document.createElement("a-circle");
+            circle.setAttribute("color", "white");
+            circle.setAttribute("radius", "1");
+            entity.appendChild(circle);
+
+            // Tambahkan teks nama lokasi
+            const text = document.createElement("a-text");
+            text.setAttribute("value", poi.name);
+            text.setAttribute("color", "white");
+            text.setAttribute("align", "center");
+            text.setAttribute("position", "0 -1.5 0");
+            text.setAttribute("scale", "2 2 2");
+            entity.appendChild(text);
+
+            // Set posisi GPS
+            entity.setAttribute("gps-projected-entity-place", `latitude: ${poi.latitude}; longitude: ${poi.longitude}`);
+
+            // Tambahkan ke scene
+            scene.appendChild(entity);
+          }
+        });
+      }
+
+      // Menangani orientasi perangkat untuk bearing
+      function initDeviceOrientation() {
+        if (window.DeviceOrientationEvent) {
+          window.addEventListener("deviceorientation", function (event) {
+            if (event.alpha !== null) {
+              // Hitung bearing (arah kompas)
+              let heading = 360 - event.alpha;
+
+              // Kompensasi orientasi layar
+              const screenOrientation = window.orientation || 0;
+              heading = (heading + screenOrientation) % 360;
+
+              // Update UI
+              bearingElement.textContent = `Bearing: ${heading.toFixed(2)}°`;
+            }
+          });
+        } else {
+          console.warn("DeviceOrientation tidak didukung oleh browser ini.");
+        }
+      }
+
+      // Mulai ketika halaman selesai dimuat
+      window.onload = function () {
+        initLocationTracking();
+        initDeviceOrientation();
+      };
+    </script>
+  </body>
+</html>
