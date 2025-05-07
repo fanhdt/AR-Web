@@ -8,10 +8,12 @@
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
 
-    <!-- AR.js dan Three.js -->
+    <!-- Three.js -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/ar.js/2.2.2/aframe-ar.min.js"></script>
+
+    <!-- A-Frame dan AR.js -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/aframe/1.2.0/aframe.min.js"></script>
+    <script src="https://raw.githack.com/AR-js-org/AR.js/master/aframe/build/aframe-ar.js"></script>
     <script src="https://unpkg.com/aframe-look-at-component@0.8.0/dist/aframe-look-at-component.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/Turf.js/6.5.0/turf.min.js"></script>
 
@@ -36,20 +38,64 @@
         color: white;
         z-index: 20;
       }
+
+      /* Tambahkan style untuk tombol izin kamera */
+      #camera-permission {
+        position: fixed;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        padding: 1rem 2rem;
+        background-color: #3b82f6;
+        color: white;
+        border: none;
+        border-radius: 0.5rem;
+        font-size: 1.2rem;
+        cursor: pointer;
+        z-index: 30;
+      }
+
+      /* Status loading */
+      #loading-indicator {
+        position: fixed;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        background-color: rgba(0, 0, 0, 0.7);
+        color: white;
+        padding: 1rem;
+        border-radius: 0.5rem;
+        z-index: 25;
+      }
     </style>
   </head>
   <body class="m-0 p-0 overflow-hidden">
-    <!-- A-Frame Scene -->
-    <a-scene vr-mode-ui="enabled: false" embedded arjs="sourceType: webcam; debugUIEnabled: false; detectionMode: mono_and_matrix; matrixCodeType: 3x3;">
+    <!-- Tombol untuk meminta izin kamera -->
+    <button id="camera-permission" class="shadow-lg">Aktifkan Kamera AR</button>
+
+    <!-- Loading indicator -->
+    <div id="loading-indicator" class="hidden">Memuat AR dan lokasi...</div>
+
+    <!-- A-Frame Scene (akan ditampilkan setelah izin) -->
+    <a-scene
+      id="ar-scene"
+      embedded
+      vr-mode-ui="enabled: false"
+      arjs="sourceType: webcam; debugUIEnabled: false; detectionMode: mono_and_matrix; matrixCodeType: 3x3; sourceWidth: 1280; sourceHeight: 960; displayWidth: 1280; displayHeight: 960;"
+      renderer="logarithmicDepthBuffer: true; precision: medium;"
+      style="display: none"
+    >
       <!-- Kamera dengan atribut GPS -->
-      <a-camera gps-camera="minDistance: 0; maxDistance: 50000" rotation-reader look-controls-enabled="false" arjs-look-controls="smoothingFactor: 0.1" id="camera"> </a-camera>
+      <a-camera gps-projected-camera="gpsMinDistance: 5; gpsTimeInterval: 1000" rotation-reader look-controls-enabled="false" arjs-look-controls="smoothingFactor: 0.1" id="camera">
+        <a-entity cursor="fuse: false; rayOrigin: mouse;" raycaster="far: 20; interval: 1000; objects: .clickable"></a-entity>
+      </a-camera>
 
       <!-- Template untuk POI (Point of Interest) -->
       <a-entity id="places-container"></a-entity>
     </a-scene>
 
     <!-- UI Overlay -->
-    <div class="location-info bg-blue-900 bg-opacity-70 text-white p-4">
+    <div class="location-info bg-blue-900 bg-opacity-70 text-white p-4" style="display: none">
       <div id="location-display" class="text-sm">Mencari lokasi...</div>
       <div id="bearing-display" class="text-sm">Menghitung arah...</div>
     </div>
@@ -58,9 +104,9 @@
     <div id="distance-indicators" class="ar-overlay"></div>
 
     <script>
-      // Data POI (Points of Interest) - Contoh dari kode Java asli
+      // Data POI (Points of Interest)
       const POIs = [
-        { name: "Rumah Irfan", lat: -6.9867784, lon: 107.6457581, altitude: 684.30 },
+        { name: "Rumah Irfan", lat: -6.9867784, lon: 107.6457581, altitude: 684.3 },
         { name: "Linh Ung Pagoda", lat: 16.1072989, lon: 108.2343984, altitude: 0 },
       ];
 
@@ -68,21 +114,73 @@
       let userLocation = null;
       let userHeading = 0;
       let watchId = null;
+      let cameraStarted = false;
 
       // Inisialisasi aplikasi
       window.onload = () => {
-        initializeApp();
+        document.getElementById("camera-permission").addEventListener("click", initializeApp);
       };
 
       function initializeApp() {
-        // Mulai melacak lokasi pengguna
-        startLocationTracking();
+        // Tampilkan indikator loading
+        document.getElementById("loading-indicator").classList.remove("hidden");
 
-        // Tambahkan event listener untuk orientasi perangkat
-        window.addEventListener("deviceorientation", updateHeading);
+        // Sembunyikan tombol izin
+        document.getElementById("camera-permission").style.display = "none";
 
-        // Tambahkan POIs ke scene
-        renderPOIs();
+        // Mulai dengan meminta izin kamera secara eksplisit
+        navigator.mediaDevices
+          .getUserMedia({ video: { facingMode: "environment" } })
+          .then((stream) => {
+            console.log("Izin kamera diberikan");
+
+            // Tampilkan scene AR
+            document.getElementById("ar-scene").style.display = "block";
+            document.querySelector(".location-info").style.display = "block";
+
+            // Mulai pelacakan lokasi
+            startLocationTracking();
+
+            // Tambahkan event listener untuk orientasi perangkat
+            window.addEventListener("deviceorientation", handleDeviceOrientation, true);
+
+            // Tambahkan POIs ke scene
+            renderPOIs();
+
+            // Sembunyikan loading indicator setelah beberapa detik
+            setTimeout(() => {
+              document.getElementById("loading-indicator").classList.add("hidden");
+            }, 3000);
+          })
+          .catch((error) => {
+            console.error("Gagal mendapatkan izin kamera:", error);
+            alert("Izin kamera diperlukan untuk AR. Error: " + error.message);
+            document.getElementById("camera-permission").style.display = "block";
+            document.getElementById("loading-indicator").classList.add("hidden");
+          });
+      }
+
+      function handleDeviceOrientation(event) {
+        // Cek apakah perlu izin untuk iOS 13+
+        if (typeof DeviceOrientationEvent.requestPermission === "function") {
+          // iOS 13+ membutuhkan izin eksplisit
+          DeviceOrientationEvent.requestPermission()
+            .then((permissionState) => {
+              if (permissionState === "granted") {
+                window.addEventListener("deviceorientation", updateHeading);
+              } else {
+                alert("Izin orientasi perangkat diperlukan untuk mengetahui arah pengguna");
+              }
+            })
+            .catch(console.error);
+
+          // Hapus event listener ini karena sudah tidak diperlukan
+          window.removeEventListener("deviceorientation", handleDeviceOrientation, true);
+        } else {
+          // Perangkat lain langsung menggunakan event handler
+          window.removeEventListener("deviceorientation", handleDeviceOrientation, true);
+          window.addEventListener("deviceorientation", updateHeading);
+        }
       }
 
       function startLocationTracking() {
@@ -147,12 +245,13 @@
           const poiEntity = document.createElement("a-entity");
           poiEntity.setAttribute("id", `poi-${index}`);
           poiEntity.setAttribute("gps-entity-place", `latitude: ${poi.lat}; longitude: ${poi.lon}`);
-          poiEntity.setAttribute("look-at", "[gps-camera]");
+          poiEntity.setAttribute("look-at", "[gps-projected-camera]");
           poiEntity.setAttribute("scale", "20 20 20"); // Ukuran yang lebih besar agar terlihat dari jauh
+          poiEntity.setAttribute("class", "clickable");
 
           // Buat objek visual untuk POI (lingkaran 3D)
           const circle = document.createElement("a-circle");
-          circle.setAttribute("color", "white");
+          circle.setAttribute("color", "#4285F4");
           circle.setAttribute("radius", "0.5");
           circle.setAttribute("material", "opacity: 0.8");
 
@@ -163,6 +262,7 @@
           text.setAttribute("align", "center");
           text.setAttribute("position", "0 0.75 0");
           text.setAttribute("scale", "2 2 2");
+          text.setAttribute("side", "double");
 
           // Tambahkan objek visual dan teks ke entity POI
           poiEntity.appendChild(circle);
@@ -182,8 +282,16 @@
             const maxDist = 5000; // maksimum jarak dalam meter
             const scaleFactor = Math.max(0.5, Math.min(3, 1 + (maxDist - distance) / maxDist));
 
+            // Tampilkan jarak di konsol untuk debugging
+            console.log(`Jarak ke ${poi.name}: ${distance.toFixed(2)} m`);
+
             // Terapkan skala baru
             poiEntity.setAttribute("scale", `${baseScale * scaleFactor} ${baseScale * scaleFactor} ${baseScale * scaleFactor}`);
+          });
+
+          // Tambahkan event listener untuk klik pada POI
+          poiEntity.addEventListener("click", () => {
+            alert(`Anda mengklik ${poi.name}`);
           });
         });
       }
@@ -238,6 +346,18 @@
         // Render ulang POIs
         document.getElementById("places-container").innerHTML = "";
         renderPOIs();
+      }
+
+      // Dapatkan lokasi saat ini dan tambahkan sebagai POI
+      function addCurrentLocationAsPOI() {
+        if (userLocation) {
+          const name = prompt("Masukkan nama untuk lokasi ini:", "Lokasi Saya");
+          if (name) {
+            addNewPOI(name, userLocation.lat, userLocation.lon, userLocation.alt);
+          }
+        } else {
+          alert("Lokasi pengguna belum tersedia");
+        }
       }
 
       // Pembersihan ketika aplikasi ditutup
